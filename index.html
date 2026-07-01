@@ -1,0 +1,368 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatterbox Flute 31-TET A4 6-4-5-4-4-4-4</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #e2e8f0;
+        }
+        .key-button {
+            transition: background-color 0.1s ease-in-out, transform 0.05s ease-in-out, box-shadow 0.1s ease-in-out, border-color 0.1s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08);
+            border: 2px solid #3b82f6;
+            border-radius: 0.75rem;
+            background: linear-gradient(145deg, #2d3748, #1a202c);
+            color: #e2e8f0;
+            padding: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .key-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.1);
+            border-color: #60a5fa;
+        }
+        .key-button:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            border-color: #3b82f6;
+        }
+        /* Original colors for active and empty notes - these will be overridden by inline style for debugging */
+        .key-button.active-note {
+            background: linear-gradient(145deg, #6EE7B7, #34D399) !important; /* Lime green gradient */
+            border-color: #A7F3D0 !important;
+            color: #1A202C !important; /* Dark text for contrast */
+        }
+        .key-button.empty-note {
+            background: linear-gradient(145deg, #FDBA74, #FB923C) !important; /* Orange gradient */
+            border-color: #FED7AA !important;
+            color: #4A5568 !important;
+        }
+        .key-button.playing {
+            box-shadow: 0 0 20px rgba(74, 222, 128, 0.7), 0 0 10px rgba(74, 222, 128, 0.5);
+            border-color: #A7F3D0 !important;
+            transform: scale(1.02);
+        }
+        .key-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .interval-label {
+            color: #93c5fd;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen bg-gray-900 text-gray-100 p-4">
+    <div class="bg-gray-800 p-8 rounded-xl shadow-2xl max-w-screen-xl w-full text-center">
+        <h1 class="text-4xl font-extrabold mb-8 text-blue-400">31-TET A4 6-4-5-4-4-4-4</h1>
+        <div id="keyboard-container" class="flex justify-center flex-nowrap gap-4 mb-8 pb-2"></div>
+        <div class="text-lg font-medium text-gray-300">Click or press W, E, R, T, Y, U, I to play!</div>
+    </div>
+
+    <script>
+        
+        const savedFrequencies = JSON.parse("[440,503.17,550.25,615.34,672.91,735.86,804.71]");
+        const savedSettings = JSON.parse("{\"attack\":0.13,\"decay\":0.03,\"sustain\":0.16,\"release\":0.28,\"warbleDepth\":0.025,\"warbleSpeed\":3.2,\"noiseVolume\":0.003,\"delayMix\":0.25,\"delayTime\":0.18,\"delayFeedback\":0.86,\"distortionAmount\":25,\"reverbMix\":0.2,\"masterVolume\":1,\"filterFreq\":2230,\"filterQ\":12.5}");
+
+        let audioContext;
+        let impulseResponseBuffer = null;
+        let activeNote = {
+            oscillator: null, mainGainNode: null, filterNode: null, distortionNode: null,
+            noiseSource: null, noiseGainNode: null, convolverNode: null, reverbDryGain: null,
+            reverbWetGain: null, vibratoLfo: null, vibratoDepthGain: null, delayNode: null,
+            delayFeedbackGain: null, delayWetGain: null, masterGainNode: null,
+            keyIdentifier: null, buttonElement: null // Added buttonElement for direct DOM manipulation in saved file
+        };
+
+        const keyboardKeyMap = {
+            'w': 0, 'e': 1, 'r': 2, 't': 3, 'y': 4, 'u': 5, 'i': 6
+        };
+
+        const noteNames12TET = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        const C4_FREQ = 440 * Math.pow(2, -9/12);
+
+        function initAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                impulseResponseBuffer = generateImpulseResponse(audioContext);
+            }
+        }
+
+        function generateImpulseResponse(audioContext) {
+            const sampleRate = audioContext.sampleRate;
+            const length = sampleRate * 0.8;
+            const impulse = audioContext.createBuffer(2, length, sampleRate);
+            const impulseL = impulse.getChannelData(0);
+            const impulseR = impulse.getChannelData(1);
+            for (let i = 0; i < length; i++) {
+                const n = i / length;
+                impulseL[i] = (Math.random() * 2 - 1) * Math.pow(1 - n, 3);
+                impulseR[i] = (Math.random() * 2 - 1) * Math.pow(1 - n, 3);
+            }
+            return impulse;
+        }
+
+        function stopActiveNote() {
+            const { oscillator, mainGainNode, filterNode, distortionNode, noiseSource, noiseGainNode,
+                    convolverNode, reverbDryGain, reverbWetGain, vibratoLfo, vibratoDepthGain,
+                    delayNode, delayFeedbackGain, delayWetGain, masterGainNode, buttonElement } = activeNote; // Get buttonElement
+
+            if (oscillator) {
+                const now = audioContext.currentTime;
+                mainGainNode.gain.cancelScheduledValues(now);
+                mainGainNode.gain.linearRampToValueAtTime(0.0001, now + savedSettings.release);
+                if (noiseGainNode) {
+                    noiseGainNode.gain.cancelScheduledValues(now);
+                    noiseGainNode.gain.linearRampToValueAtTime(0.0001, now + savedSettings.release);
+                }
+                oscillator.stop(now + savedSettings.release);
+                if (noiseSource) noiseSource.stop(now + savedSettings.release);
+                if (vibratoLfo) vibratoLfo.stop(now + savedSettings.release);
+
+                // Immediately disconnect all nodes
+                oscillator.disconnect();
+                mainGainNode.disconnect();
+                if (filterNode) filterNode.disconnect();
+                if (distortionNode) distortionNode.disconnect();
+                if (noiseSource) noiseSource.disconnect();
+                if (noiseGainNode) noiseGainNode.disconnect();
+                if (convolverNode) convolverNode.disconnect();
+                if (reverbDryGain) reverbDryGain.disconnect();
+                if (reverbWetGain) reverbWetGain.disconnect();
+                if (vibratoLfo) vibratoLfo.disconnect();
+                if (vibratoDepthGain) vibratoDepthGain.disconnect();
+                if (delayNode) delayNode.disconnect();
+                if (delayFeedbackGain) delayFeedbackGain.disconnect();
+                if (delayWetGain) delayWetGain.disconnect();
+                if (masterGainNode) masterGainNode.disconnect();
+
+                // Remove 'playing' class from the button if it exists
+                if (buttonElement) {
+                    buttonElement.classList.remove('playing');
+                }
+            }
+            // Reset activeNote to null all references
+            activeNote = {
+                oscillator: null, mainGainNode: null, filterNode: null, distortionNode: null,
+                noiseSource: null, noiseGainNode: null, convolverNode: null, reverbDryGain: null,
+                reverbWetGain: null, vibratoLfo: null, vibratoDepthGain: null, delayNode: null,
+                delayFeedbackGain: null, delayWetGain: null, masterGainNode: null, keyIdentifier: null, buttonElement: null
+            };
+        }
+
+        function makeDistortionCurve(amount) {
+            const k = amount; const n_samples = 44100; const curve = new Float32Array(n_samples); const deg = Math.PI / 180;
+            for (let i = 0; i < n_samples; ++i) {
+                const x = i * 2 / n_samples - 1; curve[i] = (3 + k) * x * 20 * deg / (Math.PI + k * Math.abs(x));
+            } return curve;
+        }
+
+        function playNote(frequency, keyIdentifier, volume = 0.5, buttonElement = null) { // Added buttonElement param
+            if (frequency === null) return;
+            initAudioContext();
+            if (activeNote.oscillator) stopActiveNote(); // Stop current note for monophony
+
+            const oscillator = audioContext.createOscillator(); const mainGainNode = audioContext.createGain();
+            const filterNode = audioContext.createBiquadFilter(); const distortionNode = audioContext.createWaveShaper();
+            const noiseSource = audioContext.createBufferSource(); const noiseGainNode = audioContext.createGain();
+            const convolverNode = audioContext.createConvolver(); const reverbDryGain = audioContext.createGain();
+            const reverbWetGain = audioContext.createGain(); const vibratoLfo = audioContext.createOscillator();
+            const vibratoDepthGain = audioContext.createGain(); const delayNode = audioContext.createDelay(1.0);
+            const delayFeedbackGain = audioContext.createGain(); const delayWetGain = audioContext.createGain();
+            const masterGainNode = audioContext.createGain();
+
+            convolverNode.buffer = impulseResponseBuffer;
+            masterGainNode.gain.setValueAtTime(savedSettings.masterVolume, audioContext.currentTime);
+            oscillator.type = 'triangle'; oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+
+            vibratoLfo.type = 'sine'; vibratoLfo.frequency.setValueAtTime(savedSettings.warbleSpeed, audioContext.currentTime);
+            vibratoDepthGain.gain.setValueAtTime(savedSettings.warbleDepth * frequency, audioContext.currentTime);
+            vibratoLfo.connect(vibratoDepthGain); vibratoDepthGain.connect(oscillator.frequency); vibratoLfo.start();
+
+            filterNode.type = 'lowpass'; filterNode.frequency.setValueAtTime(savedSettings.filterFreq, audioContext.currentTime);
+            filterNode.Q.setValueAtTime(savedSettings.filterQ, audioContext.currentTime);
+
+            distortionNode.curve = makeDistortionCurve(savedSettings.distortionAmount); distortionNode.oversample = '4x';
+
+            const now = audioContext.currentTime;
+            mainGainNode.gain.setValueAtTime(0, now);
+            mainGainNode.gain.linearRampToValueAtTime(volume, now + savedSettings.attack);
+            mainGainNode.gain.linearRampToValueAtTime(savedSettings.sustain * volume, now + savedSettings.attack + savedSettings.decay);
+
+            const bufferSize = audioContext.sampleRate * 1; const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+            const output = noiseBuffer.getChannelData(0); for (let i = 0; i < bufferSize; i++) output[i] = Math.random() * 2 - 1;
+            noiseSource.buffer = noiseBuffer; noiseSource.loop = true;
+            noiseGainNode.gain.setValueAtTime(savedSettings.noiseVolume, now);
+
+            reverbDryGain.gain.setValueAtTime(1 - savedSettings.reverbMix, now);
+            reverbWetGain.gain.setValueAtTime(savedSettings.reverbMix, now);
+
+            delayNode.delayTime.setValueAtTime(savedSettings.delayTime, now);
+            delayFeedbackGain.gain.setValueAtTime(savedSettings.delayFeedback, now);
+            delayWetGain.gain.setValueAtTime(savedSettings.delayMix, now);
+
+            oscillator.connect(filterNode); filterNode.connect(distortionNode); distortionNode.connect(mainGainNode);
+            mainGainNode.connect(reverbDryGain); mainGainNode.connect(reverbWetGain); mainGainNode.connect(delayNode);
+            reverbDryGain.connect(masterGainNode); reverbWetGain.connect(convolverNode); convolverNode.connect(masterGainNode);
+            delayNode.connect(delayFeedbackGain); delayFeedbackGain.connect(delayNode); delayNode.connect(delayWetGain);
+            delayWetGain.connect(masterGainNode); noiseSource.connect(noiseGainNode); noiseGainNode.connect(masterGainNode);
+            masterGainNode.connect(audioContext.destination);
+
+            oscillator.start(); noiseSource.start();
+
+            activeNote = {
+                oscillator, mainGainNode, filterNode, distortionNode, noiseSource, noiseGainNode,
+                convolverNode, reverbDryGain, reverbWetGain, vibratoLfo, vibratoDepthGain,
+                delayNode, delayFeedbackGain, delayWetGain, masterGainNode, keyIdentifier, buttonElement // Store buttonElement
+            };
+            if (buttonElement) buttonElement.classList.add('playing'); // Add 'playing' class
+        }
+
+        function frequencyToNoteAndOctave(frequency) {
+            if (frequency <= 0) return '';
+            const C0_FREQ = 16.35;
+            const semitonesFromC0 = 12 * Math.log2(frequency / C0_FREQ);
+            const midiNote = Math.round(semitonesFromC0);
+            const noteIndex = midiNote % 12;
+            const octave = Math.floor(midiNote / 12) - 1;
+            return noteNames12TET[noteIndex] + octave;
+        }
+
+        function frequencyToIntervalName(frequency, referenceFrequency) {
+            if (frequency <= 0 || referenceFrequency <= 0) return '';
+            const semitonesDiff = Math.round(1200 * Math.log2(frequency / referenceFrequency) / 100);
+            const intervalNames = ['Unison', 'm2', 'M2', 'm3', 'M3', 'P4', 'TT', 'P5', 'm6', 'M6', 'm7', 'M7', 'Octave'];
+            const octaveOffset = Math.floor(semitonesDiff / 12);
+            const intervalIndex = semitonesDiff % 12;
+            let intervalName = intervalNames[intervalIndex];
+            if (octaveOffset > 0) intervalName += ' (+' + octaveOffset + ' Oct)';
+            else if (octaveOffset < 0) intervalName += ' (' + octaveOffset + ' Oct)';
+            return intervalName;
+        }
+
+        function frequencyToCents(frequency, referenceFrequency) {
+            if (frequency <= 0 || referenceFrequency <= 0) return 0;
+            return 1200 * Math.log2(frequency / referenceFrequency);
+        }
+
+        function createSavedKeyButtons() {
+            const keyboardContainer = document.getElementById('keyboard-container');
+            keyboardContainer.innerHTML = '';
+            const referenceFrequency = savedFrequencies.length > 0 ? savedFrequencies[0] : C4_FREQ;
+            const keyHints = ['W', 'E', 'R', 'T', 'Y', 'U', 'I'];
+
+            for (let i = 0; i < savedFrequencies.length; i++) {
+                const frequency = savedFrequencies[i];
+                const keyWrapper = document.createElement('div');
+                keyWrapper.className = 'key-wrapper flex flex-col items-center';
+
+                const intervalLabel = document.createElement('div');
+                intervalLabel.className = 'interval-label text-sm font-semibold mb-1 text-blue-300';
+                intervalLabel.textContent = frequencyToIntervalName(frequency, referenceFrequency);
+                keyWrapper.appendChild(intervalLabel);
+
+                const keyButton = document.createElement('button');
+                keyButton.id = 'key-' + i; // Fixed: Use string concatenation
+                // Apply active-note or empty-note based on frequency existence
+                keyButton.className = 'key-button w-36 h-36 sm:w-40 sm:h-40 lg:w-48 lg:h-48 ' + (frequency ? 'active-note' : 'empty-note'); // Fixed: Use string concatenation
+                keyButton.innerHTML =
+                    '<div class="note-octave text-xs font-semibold text-left w-full pl-1">' + frequencyToNoteAndOctave(frequency) + '</div>' +
+                    '<div class="text-4xl font-bold text-blue-300">' + (keyHints[i] || '') + '</div>' +
+                    '<div class="text-base font-medium">' + frequency.toFixed(2) + ' Hz</div>' +
+                    '<div class="flex justify-between w-full px-1 text-xs font-normal">' +
+                        '<span>' + (1200 * Math.log2(frequency / C4_FREQ)).toFixed(1) + 'c</span>' +
+                        '<span>Step ' + (i + 1) + '</span>' +
+                    '</div>' +
+                    '<div class="text-xs font-light text-right w-full pr-1">' + (i > 0 ? '+' + (1200 * Math.log2(frequency / savedFrequencies[i-1])).toFixed(1) + 'c' : 'Root') + '</div>'; // Fixed: Use string concatenation
+                keyButton.dataset.index = i;
+                // Pass buttonElement to playNote
+                keyButton.addEventListener('mousedown', (event) => playNote(frequency, 'mouse-click-' + i, 0.5, event.currentTarget));
+                keyButton.addEventListener('mouseup', (event) => stopActiveNote()); // stopActiveNote will remove 'playing' class
+                keyButton.addEventListener('mouseleave', (event) => stopActiveNote()); // stopActiveNote will remove 'playing' class
+                keyWrapper.appendChild(keyButton);
+                keyboardContainer.appendChild(keyWrapper);
+            }
+             // Fill remaining empty keys
+            for (let i = savedFrequencies.length; i < 7; i++) {
+                const keyWrapper = document.createElement('div');
+                keyWrapper.className = 'key-wrapper flex flex-col items-center';
+
+                const intervalLabel = document.createElement('div');
+                intervalLabel.className = 'interval-label text-sm font-semibold mb-1 text-blue-300';
+                intervalLabel.textContent = ''; // Empty for empty notes
+                keyWrapper.appendChild(intervalLabel);
+
+                const keyButton = document.createElement('button');
+                keyButton.id = 'key-' + i; // Fixed: Use string concatenation
+                keyButton.className = 'key-button w-36 h-36 sm:w-40 sm:h-40 lg:w-48 lg:h-48 empty-note';
+                keyButton.innerHTML =
+                    '<div class="note-octave text-xs font-semibold text-left w-full pl-1"></div>' +
+                    '<div class="text-4xl font-bold text-blue-300">' + (keyHints[i] || '') + '</div>' +
+                    '<div class="text-base font-medium">[Empty]</div>' +
+                    '<div class="flex justify-between w-full px-1 text-xs font-normal">' +
+                        '<span></span>' +
+                        '<span>Step ' + (i + 1) + '</span>' +
+                    '</div>' +
+                    '<div class="text-xs font-light text-right w-full pr-1"></div>';
+                keyButton.disabled = true; // Disable empty buttons
+                keyWrapper.appendChild(keyButton);
+                keyboardContainer.appendChild(keyWrapper);
+            }
+        }
+
+        document.addEventListener('keydown', (event) => {
+            const key = event.key.toLowerCase();
+            if (key === ' ') {
+                event.preventDefault();
+                stopActiveNote(); // Stop all sound
+                return;
+            }
+
+            const keyIndex = keyboardKeyMap[key];
+            // Check if key is mapped and not already pressed
+            if (keyIndex !== undefined && keyIndex < savedFrequencies.length && !event.repeat) { // Added !event.repeat
+                event.preventDefault();
+                const frequency = savedFrequencies[keyIndex];
+                const buttonElement = document.getElementById('key-' + keyIndex); // Fixed: Use string concatenation
+                if (frequency !== undefined) { // Only play if a note is assigned
+                    playNote(frequency, key, 0.5, buttonElement); // Pass buttonElement
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (event) => {
+            const key = event.key.toLowerCase();
+            if (key === ' ') return; // Spacebar handled by keydown
+
+            const keyIndex = keyboardKeyMap[key];
+            // Only stop if the released key was the one currently playing
+            if (keyIndex !== undefined && activeNote.keyIdentifier === key) {
+                stopActiveNote(); // stopActiveNote will remove 'playing' class
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            createSavedKeyButtons();
+            document.addEventListener('click', initAudioContext, { once: true });
+            document.addEventListener('keydown', initAudioContext, { once: true });
+        });
+        
+    </script>
+</body>
+</html>
+        
